@@ -1,5 +1,6 @@
 // Multer setup for parsing multipart form data (no disk storage)
 const multer = require('multer');
+const path = require('path');
 const upload = multer({
   storage: multer.memoryStorage(),
   fileFilter: function (req, file, cb) {
@@ -288,4 +289,5 @@ mongoose.connect(MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
     console.error('MongoDB connection error:', err);
     process.exit(1);
   });
+
 
