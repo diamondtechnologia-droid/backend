@@ -1,6 +1,28 @@
-// Multer setup for parsing multipart form data (no disk storage)
+// === Load environment variables first ===
+require('dotenv').config();
+
+// === Import dependencies ===
+const express = require('express');
+const mongoose = require('mongoose');
+const cors = require('cors');
+const bcrypt = require('bcrypt');
 const multer = require('multer');
 const path = require('path');
+const cloudinary = require('cloudinary').v2;
+
+// === Initialize Express app ===
+const app = express();
+app.use(express.json());
+app.use(cors());
+
+// === Configure Cloudinary ===
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
+
+// === Multer setup ===
 const upload = multer({
   storage: multer.memoryStorage(),
   fileFilter: function (req, file, cb) {
@@ -12,23 +34,6 @@ const upload = multer({
   }
 });
 
-// Cloudinary setup
-const cloudinary = require('cloudinary').v2;
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET
-});
-require('dotenv').config();
-const express = require('express');
-const mongoose = require('mongoose');
-const cors = require('cors');
-const bcrypt = require('bcrypt');
-
-const app = express();
-app.use(express.json());
-app.use(cors());
-
 // Health check
 app.get('/', (req, res) => {
   res.send('DocuShop backend is running');
@@ -36,6 +41,15 @@ app.get('/', (req, res) => {
 
 const User = require('./user');
 const CryptoAddress = require('./CryptoAddress');
+const PaymentMethod = require('./PaymentMethod');
+const Product = require('./Product');
+const Order = require('./Order');
+const Shipping = require("./Shipping");
+
+
+// ==========================
+// USER ROUTES
+// ==========================
 
 // Delete product by ID
 app.delete('/products/:id', async (req, res) => {
@@ -55,7 +69,6 @@ app.put('/users/admin', async (req, res) => {
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password required' });
     }
-    // Find admin user
     const admin = await User.findOne({ role: 'admin' });
     if (!admin) {
       return res.status(404).json({ error: 'Admin user not found' });
@@ -89,7 +102,7 @@ app.post('/users/register', async (req, res) => {
       phone,
       password: hashedPassword,
       role: 'user',
-      status: 'active' // Ensure user is active on registration
+      status: 'active'
     });
     await user.save();
     res.json({ message: 'Registration successful', user: { id: user._id, email: user.email, username: user.username } });
@@ -131,7 +144,10 @@ app.post('/users/login', async (req, res) => {
   }
 });
 
-// Get crypto addresses
+// ==========================
+// CRYPTO ADDRESS ROUTES
+// ==========================
+
 app.get('/crypto-addresses', async (req, res) => {
   try {
     let addresses = await CryptoAddress.findOne();
@@ -145,7 +161,6 @@ app.get('/crypto-addresses', async (req, res) => {
   }
 });
 
-// Update crypto addresses
 app.put('/crypto-addresses', async (req, res) => {
   try {
     const { bitcoin, ethereum, usdt } = req.body;
@@ -165,7 +180,9 @@ app.put('/crypto-addresses', async (req, res) => {
   }
 });
 
-// TEMPORARY: Create admin user route (remove after use)
+// ==========================
+// ADMIN CREATION (TEMPORARY)
+// ==========================
 app.post('/create-admin', async (req, res) => {
   try {
     const { username = 'admin', email = 'admin@example.com', password = 'admin123' } = req.body;
@@ -188,9 +205,103 @@ app.post('/create-admin', async (req, res) => {
   }
 });
 
+// ==========================
+// PAYMENT METHODS ROUTES
+// ==========================
 
-// --- Product Routes ---
-const Product = require('./Product');
+// Get payment methods (always return one document)
+// Professional GET route for all active payment methods
+app.get('/api/payment-methods', async (req, res) => {
+  try {
+    const methods = await PaymentMethod.find({ active: true });
+    console.log('[DEBUG] GET /api/payment-methods:', methods);
+    res.json(methods);
+  } catch (err) {
+    console.error('[ERROR] GET /api/payment-methods:', err);
+    res.status(500).json({ error: 'Failed to fetch payment methods' });
+  }
+});
+
+// ✅ Unified PUT /payment-methods (removed duplicate)
+app.put('/api/payment-methods', async (req, res) => {
+  try {
+    const { bank, paypal, skype, bitcoin, ethereum, usdt } = req.body;
+
+    // --- Handle Bank ---
+    if (bank) {
+      let bankMethod = await PaymentMethod.findOne({ type: 'Bank' });
+      if (bankMethod) {
+        bankMethod.credentials = { account: bank };
+        bankMethod.active = true;
+        await bankMethod.save();
+      } else {
+        await PaymentMethod.create({
+          type: 'Bank',
+          credentials: { account: bank },
+          active: true
+        });
+      }
+    }
+
+    // --- Handle PayPal ---
+    if (paypal) {
+      let paypalMethod = await PaymentMethod.findOne({ type: 'PayPal' });
+      if (paypalMethod) {
+        paypalMethod.credentials = { email: paypal };
+        paypalMethod.active = true;
+        await paypalMethod.save();
+      } else {
+        await PaymentMethod.create({
+          type: 'PayPal',
+          credentials: { email: paypal },
+          active: true
+        });
+      }
+    }
+
+    // --- Handle Skype ---
+    if (skype) {
+      let skypeMethod = await PaymentMethod.findOne({ type: 'Skype' });
+      if (skypeMethod) {
+        skypeMethod.credentials = { id: skype };
+        skypeMethod.active = true;
+        await skypeMethod.save();
+      } else {
+        await PaymentMethod.create({
+          type: 'Skype',
+          credentials: { id: skype },
+          active: true
+        });
+      }
+    }
+
+    // --- Handle Crypto ---
+    if (bitcoin || ethereum || usdt) {
+      let cryptoMethod = await PaymentMethod.findOne({ type: 'Crypto' });
+      const credentials = { bitcoin, ethereum, usdt };
+      if (cryptoMethod) {
+        cryptoMethod.credentials = { ...(cryptoMethod.credentials || {}), ...credentials };
+        cryptoMethod.active = true;
+        await cryptoMethod.save();
+      } else {
+        await PaymentMethod.create({
+          type: 'Crypto',
+          credentials,
+          active: true
+        });
+      }
+    }
+
+    res.json({ message: 'Payment methods saved/updated successfully' });
+  } catch (err) {
+    console.error('PUT /payment-methods error:', err);
+    res.status(500).json({ error: 'Error saving payment methods' });
+  }
+});
+
+// ==========================
+// PRODUCT ROUTES
+// ==========================
 app.get('/products', async (req, res) => {
   try {
     const category = req.query.category;
@@ -208,55 +319,97 @@ app.post('/products', upload.single('image'), async (req, res) => {
     if (!name || !category || !price || !req.file) {
       return res.status(400).json({ error: 'Missing required fields: name, category, price, image' });
     }
-    // Upload image to Cloudinary
-    let cloudinaryResult;
-    try {
-      cloudinaryResult = await cloudinary.uploader.upload_stream({ resource_type: 'image' }, async (error, result) => {
-        if (error || !result) {
-          throw new Error('Image upload failed: ' + (error?.message || 'Unknown error'));
-        }
-        // Save product to MongoDB
-        const product = new Product({
-          name,
-          description,
-          price,
-          image: result.secure_url,
-          category,
-          available: true
-        });
-        await product.save();
-        return res.json({ message: 'Product created', product });
+    cloudinary.uploader.upload_stream({ resource_type: 'image' }, async (error, result) => {
+      if (error || !result) {
+        return res.status(500).json({ error: 'Image upload failed: ' + (error?.message || 'Unknown error') });
+      }
+      const product = new Product({
+        name,
+        description,
+        price,
+        image: result.secure_url,
+        category,
+        available: true
       });
-      cloudinaryResult.end(req.file.buffer);
-    } catch (err) {
-      return res.status(500).json({ error: 'Image upload failed: ' + err.message });
-    }
+      await product.save();
+      return res.json({ message: 'Product created', product });
+    }).end(req.file.buffer);
   } catch (err) {
     return res.status(500).json({ error: 'Server error: ' + err.message });
   }
 });
+
 // Serve uploaded images statically
 app.use('/uploads', require('express').static(path.join(__dirname, 'uploads')));
 
-// --- Order Routes ---
-const Order = require('./Order');
+// ==========================
+// ORDER ROUTES
+// ==========================
 app.get('/orders', async (req, res) => {
   try {
-    const orders = await Order.find().populate('user').populate('products.product');
-    res.json(orders);
+    const orders = await Order.find()
+      .populate('user', 'username email') // only return safe user fields
+      .populate('products.product', 'name price'); // only return name & price
+
+    // 🔹 Ensure fallback if product was deleted
+    const formattedOrders = orders.map(order => ({
+      ...order.toObject(),
+      products: order.products.map(p => ({
+        product: p.product ? p.product._id : null,
+        quantity: p.quantity,
+        snapshot: p.snapshot || {
+          name: p.product ? p.product.name : "Unknown (deleted)",
+          price: p.product ? p.product.price : 0
+        }
+      }))
+    }));
+
+    res.json(formattedOrders);
   } catch (err) {
+    console.error("Error fetching orders:", err);
     res.status(500).json({ error: 'Error fetching orders' });
   }
 });
 
 app.post('/orders', async (req, res) => {
   try {
-    const { user, products, total, billingInfo, paymentAddresses } = req.body;
-    const order = new Order({ user, products, total, billingInfo, paymentAddresses });
+    const { user, products, total, billingInfo, paymentAddresses, paymentMethod } = req.body;
+
+    // 🔹 Ensure billingInfo.name is set (combine firstname + lastname if available)
+    if (!billingInfo.name && billingInfo.firstname && billingInfo.lastname) {
+      billingInfo.name = `${billingInfo.firstname} ${billingInfo.lastname}`;
+    }
+
+    // 🔹 Add product snapshots (name + price at order time)
+    const populatedProducts = await Promise.all(
+      products.map(async (p) => {
+        const prod = await Product.findById(p.product);
+        return {
+          product: p.product,
+          quantity: p.quantity,
+          snapshot: {
+            name: prod ? prod.name : "Unknown",
+            price: prod ? prod.price : 0
+          }
+        };
+      })
+    );
+
+    // 🔹 Save order with snapshots + billing info
+    const order = new Order({
+      user,
+      products: populatedProducts,
+      total,
+      billingInfo,
+      paymentAddresses,
+      paymentMethod
+    });
+
     await order.save();
-    res.json({ message: 'Order placed', order });
+    res.json({ message: "✅ Order placed successfully", order });
   } catch (err) {
-    res.status(500).json({ error: 'Error placing order' });
+    console.error("Error placing order:", err);
+    res.status(500).json({ error: "Error placing order" });
   }
 });
 
@@ -270,7 +423,60 @@ app.patch('/orders/:id/cancel', async (req, res) => {
     res.status(500).json({ error: 'Error cancelling order' });
   }
 });
+// Add GET /users route to return an empty array or user list
+app.get('/users', async (req, res) => {
+  // TODO: Replace with actual user fetching logic if needed
+  res.json([]);
+});
+// Hard delete order
+app.delete('/orders/:id', async (req, res) => {
+  try {
+    const deletedOrder = await Order.findByIdAndDelete(req.params.id);
+    if (!deletedOrder) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+    res.json({ message: 'Order deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting order:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+// === Shipping Settings Routes ===
 
+// Get current shipping settings
+app.get("/api/shipping", async (req, res) => {
+  try {
+    let settings = await Shipping.findOne();
+    if (!settings) {
+      settings = new Shipping();
+      await settings.save();
+    }
+    res.json(settings);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update shipping settings
+app.put("/api/shipping", async (req, res) => {
+  try {
+    let settings = await Shipping.findOne();
+    if (!settings) {
+      settings = new Shipping();
+    }
+    settings.method = req.body.method;
+    settings.cost = req.body.cost;
+    settings.estimatedDelivery = req.body.estimatedDelivery;
+    await settings.save();
+    res.json(settings);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================
+// SERVER START
+// ==========================
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGODB_URI;
 
@@ -289,5 +495,12 @@ mongoose.connect(MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
     console.error('MongoDB connection error:', err);
     process.exit(1);
   });
+
+
+
+
+
+
+
 
 
